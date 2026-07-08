@@ -9,6 +9,19 @@ import requests
 from kafka import KafkaProducer
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from xgboost import data
+import json
+import time
+import logging
+import signal
+import sys
+from typing import Dict, List
+from datetime import datetime, timezone
+import os
+import requests
+from kafka import KafkaProducer
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # =====================================================
 # CONFIGURATION
@@ -137,180 +150,7 @@ def filter_fields(record: dict, dataset: str) -> dict:
     return {k: record.get(k) for k in fields}
 
 
-''' def extract_records(response_json: dict) -> List[dict]:
-    """FEMA API wraps results in unknown key."""
-    key = list(response_json.keys())[0]
-    records = response_json.get(key, [])
-    
-    # Ensure each record is a dict
-    cleaned = []
-    for r in records:
-        if isinstance(r, dict):
-            cleaned.append(r)
-        else:
-            try:
-                # Sometimes records may be JSON strings
-                cleaned.append(json.loads(r))
-            except Exception:
-                # skip malformed record
-                continue
-    return cleaned '''
 
-
-'''def extract_records(response_json: dict):
-
-    for key, value in response_json.items():
-        if isinstance(value, list):
-            return value
-
-    return []
-
-
-def build_event(dataset: str, record: dict) -> dict:
-    """Create standardized streaming event."""
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "source": dataset,
-        "event_time": datetime.now(timezone.utc).isoformat(),
-        "payload": record,
-    }
-
-
-def send_to_kafka(dataset: str, record: dict):
-    """Send event to Kafka and wait for delivery"""
-
-    disaster_id = str(record.get("disasterNumber", "0"))
-
-    event = build_event(dataset, record)
-
-    future = producer.send(
-        topic=KAFKA_TOPIC,
-        key=disaster_id,
-        value=event,
-    )
-
-    # ✅ BLOCK until Kafka confirms write
-    metadata = future.get(timeout=60)
-
-    logger.info(
-        f"Delivered → topic={metadata.topic} "
-        f"partition={metadata.partition} "
-        f"offset={metadata.offset}"
-    )
-
-
-# =====================================================
-# STREAM ONE DATASET
-# =====================================================
-
-def stream_dataset(name: str, url: str):
-
-    logger.info(f"Starting stream for dataset: {name}")
-
-    skip = 0
-    total_sent = 0
-
-    while RUNNING:
-        params = {
-            "$top": PAGE_SIZE,
-            "$skip": skip,
-            "$orderby": "declarationDate desc",
-        }
-
-        try:
-            response = session.get(
-                url,
-                params=params,
-                timeout=REQUEST_TIMEOUT,
-            )
-            response.raise_for_status()
-
-            records = extract_records(response.json())
-            logger.info(f"{name}: received {len(records)} records")
-
-            if not records:
-                logger.info(f"{name}: ingestion complete.there were no records to fetch OR there was no record fetched at all. Ending stream.")
-                break
-
-            for record in records:
-                filtered = filter_fields(record, name)
-                send_to_kafka(name, filtered)
-                time.sleep(0.04)
-
-            batch_size = len(records)
-            total_sent += batch_size
-
-            logger.info(
-                f"{name}: sent batch={batch_size}, total={total_sent}"
-            )
-
-            skip += PAGE_SIZE
-            time.sleep(SLEEP_BETWEEN_REQUESTS)
-
-        except Exception as e:
-            logger.error(f"{name}: streaming error -> {e}")
-            time.sleep(5)
-
-    logger.info(f"{name}: finished.")
-
-# =====================================================
-# MAIN PIPELINE
-# =====================================================
-
-def run_pipeline():
-
-    logger.info("===== FEMA Kafka Producer Started =====")
-
-    try:
-        for dataset, url in ENDPOINTS.items():
-
-            if not RUNNING:
-                break
-
-            stream_dataset(dataset, url)
-
-    finally:
-        logger.info("Flushing producer...")
-        producer.flush()
-        producer.close()
-        logger.info("===== FEMA Kafka Producer Finished =====")
-
-# =====================================================
-# ENTRYPOINT
-# =====================================================
-
-if __name__ == "__main__":
-    try:
-        run_pipeline()
-    except Exception as e:
-        logger.exception(f"Fatal error: {e}")
-        sys.exit(1)'''
-
-        
-
-
-
-
-
-
-
-
-
-
-
-import json
-import time
-import logging
-import signal
-import sys
-from typing import Dict, List
-from datetime import datetime, timezone
-import os
-
-import requests
-from kafka import KafkaProducer
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # ===============================
 # CONFIGURATION (ENV-friendly)
@@ -436,8 +276,10 @@ def stream_dataset(name: str, url: str):
         try:
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
-            key = list(response.json().keys())[0]
-            records = response.json().get(key, [])
+            
+            data = response.json()
+            key = list(data.keys())[0]
+            records = data.get(key, [])
 
             if not records:
                 logger.info(f"{name}: ingestion complete.")
