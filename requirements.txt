@@ -1,0 +1,15 @@
+pandas
+numpy
+scikit-learn
+xgboost
+mlflow
+fastapi
+uvicorn
+streamlit
+requests
+kafka-python
+pyarrow
+shap
+optuna
+evidently
+feast

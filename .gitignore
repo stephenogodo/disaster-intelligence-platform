@@ -1,0 +1,111 @@
+@"
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+*.env.local
+*.env.production
+
+# ── Raw and processed data — NEVER commit (gigabytes of FEMA/NOAA downloads) ─
+direct_data_streaming/data/raw/
+direct_data_streaming/data/processed/
+data_ingestion/data/
+
+# ── Log files (everywhere) ────────────────────────────────────────────────────
+*.log
+api/logs/
+ml/logs/
+dashboard/logs/
+direct_data_streaming/src/ingestion/logs/
+direct_data_streaming/src/processing/logs/
+
+# ── MLflow artifacts ──────────────────────────────────────────────────────────
+mlflow.db
+mlruns/
+ml/mlruns/
+
+# ── Trained model binaries ────────────────────────────────────────────────────
+models/best_model.pkl
+models/xgboost_fema_model.pkl
+
+# ── Jupyter notebook checkpoints ─────────────────────────────────────────────
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# ── OS noise ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Airflow ───────────────────────────────────────────────────────────────────
+airflow/logs/
+airflow/plugins/
+airflow/__pycache__/
+
+# ── Kafka / streaming runtime output ─────────────────────────────────────────
+data_ingestion/data/
+data_ingestion/logs/
+data_ingestion/__pycache__/
+
+# ── Feast feature store (if re-enabled) ───────────────────────────────────────
+feature_store/
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+"@ | Set-Content .gitignore -Encoding utf8
+# Python cache
+**/__pycache__/
+
+# Pytest
+.pytest_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Mac
+.AppleDouble
+.LSOverride
+
+# Temporary
+*.tmp
+*.bak
+
+# Local database
+*.db-journal
+
+# VS Code workspace
+*.code-workspace
+*.ipynb
+# Generated feature datasets
+data/features.parquet
+~$*.docx
+.docx
+direct_data_streaming/src/ingestion/data/
+rainfall_data_ingestion_v0.py
+clean_and_engineer_v0.py
+model_developm
+# Development versions
+*_v0.py
+
+# Working documents
+docs/FEMA.docx
+docs/FEMA_Project Note.txt
+docs/FEMA_ML_Portfolio_Documentation.docx
+models/feature_columns.pkl
