@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+direct_data_streaming/data/raw/
+direct_data_streaming/data/processed/
+direct_data_streaming/src/ingestion/logs/
+ml/logs/
+api/logs/
+dashboard/logs/
+mlflow.db
+mlruns/
+reports/
+.git/
+*.md

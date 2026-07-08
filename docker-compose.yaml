@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: fema-cost-api
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: fema-cost-dashboard
+    ports:
+      - "8502:8501"
+    depends_on:
+      - api
+    environment:
+      # Inside Docker's network, containers reach each other by SERVICE
+      # NAME, not 127.0.0.1 — "api" resolves to the api container.
+      # dashboard/app.py needs a one-line edit to read this (see below).
+      - API_URL=http://api:8000
+    restart: unless-stopped

@@ -1,0 +1,23 @@
+# Dockerfile.api — FEMA Disaster Cost Forecaster API
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies first (separate layer — only rebuilds when
+# requirements change, not on every code edit)
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# Copy only what the API needs at runtime — NOT ml/, direct_data_streaming/,
+# or mlflow.db, none of which are needed once a model is already trained
+COPY api/ ./api/
+COPY models/ ./models/
+
+EXPOSE 8000
+
+# Healthcheck lets `docker ps` / docker-compose report container health,
+# using the same /health endpoint we've been curl-testing throughout
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
