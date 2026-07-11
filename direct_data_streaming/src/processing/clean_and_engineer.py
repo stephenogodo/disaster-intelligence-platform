@@ -7,7 +7,7 @@ Inputs:  direct_data_streaming/data/raw/declarations.parquet
          direct_data_streaming/data/raw/disaster_summaries.parquet
          direct_data_streaming/data/processed/climate_aggregated.parquet
 
-Outputs: direct_data_streaming/data/processed/features.parquet
+Outputs: direct_data_streaming/data/processed/features.csv
          direct_data_streaming/data/processed/cost_aggregated.parquet
 """
 
@@ -29,20 +29,25 @@ _HERE    = Path(__file__).resolve().parent          # .../src/processing
 _SRC     = _HERE.parent                             # .../src
 _DS_ROOT = _SRC.parent                               # .../direct_data_streaming
 
-RAW_DIR  = _DS_ROOT / "data" / "raw"
+#RAW_DIR  = _DS_ROOT / "data" / "raw"
+import argparse
+
+from direct_data_streaming.src.common.data_source import (
+    get_raw_directory,
+)
 PROC_DIR = _DS_ROOT / "data" / "processed"
 PROC_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─────────────────────────────────────────────
 # 1. LOAD RAW DATA
 # ─────────────────────────────────────────────
+def load_raw(raw_dir: Path):
 
-def load_raw():
     logging.info("Loading raw parquet files…")
 
-    declarations     = pd.read_parquet(RAW_DIR / "declarations.parquet")
-    public_assistance = pd.read_parquet(RAW_DIR / "public_assistance.parquet")
-    disaster_summaries = pd.read_parquet(RAW_DIR / "disaster_summaries.parquet")
+    declarations     = pd.read_parquet(raw_dir / "declarations.parquet")
+    public_assistance = pd.read_parquet(raw_dir / "public_assistance.parquet")
+    disaster_summaries = pd.read_parquet(raw_dir / "disaster_summaries.parquet")
 
     logging.info(f"  declarations:      {declarations.shape}")
     logging.info(f"  public_assistance: {public_assistance.shape}")
@@ -430,13 +435,20 @@ def engineer_features(declarations: pd.DataFrame,
 # 6. MAIN
 # ─────────────────────────────────────────────
 
-def main():
-    declarations, public_assistance, disaster_summaries = load_raw()
+def main(source: str = "batch"):
+
+    raw_dir = get_raw_directory(source)
+
+    logging.info(f"Using '{source}' data source")
+    logging.info(f"Raw data directory: {raw_dir}")
+
+    declarations, public_assistance, disaster_summaries = load_raw(raw_dir)
+
     climate = load_climate()
 
-    declarations_clean  = clean_declarations(declarations)
-    cost_aggregated     = clean_public_assistance(public_assistance)
-    summaries_clean     = clean_summaries(disaster_summaries)
+    declarations_clean = clean_declarations(declarations)
+    cost_aggregated = clean_public_assistance(public_assistance)
+    summaries_clean = clean_summaries(disaster_summaries)
 
     features = engineer_features(
         declarations_clean,
@@ -450,12 +462,11 @@ def main():
 
     try:
         features.to_csv(tmp_path, index=False)
-        tmp_path.replace(out_path)  # atomic rename — avoids partial writes
-                                     # and works around brief Windows file locks
+        tmp_path.replace(out_path)
+
     except PermissionError as e:
         logging.error(
-            f"Could not write {out_path} — likely open in Excel/another program "
-            f"or locked by OneDrive sync. Close it and rerun. Details: {e}"
+            f"Could not write {out_path}. Details: {e}"
         )
         raise
 
@@ -463,6 +474,23 @@ def main():
     logging.info(f"Columns: {features.columns.tolist()}")
     logging.info("===== STEP 2 COMPLETE =====")
 
+
+'''if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Feature Engineering Pipeline"
+    )
+
+    parser.add_argument(
+        "--source",
+        default="batch",
+        choices=["batch", "kafka"],
+        help="Raw data source",
+    )
+
+    args = parser.parse_args()
+
+    main(source=args.source)'''
 
 if __name__ == "__main__":
     main()
