@@ -475,7 +475,7 @@ def main(source: str = "batch"):
     logging.info("===== STEP 2 COMPLETE =====")
 
 
-'''if __name__ == "__main__":
+if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
         description="Feature Engineering Pipeline"
@@ -490,7 +490,9 @@ def main(source: str = "batch"):
 
     args = parser.parse_args()
 
-    main(source=args.source)'''
+    main(source=args.source)
+    
+    '''
 
 if __name__ == "__main__":
-    main()
+    main()'''
