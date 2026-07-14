@@ -1,186 +1,374 @@
+"""
+FEMA Incremental Data Ingestion
+
+Version 1 Architecture
+----------------------
+1. Read checkpoint
+2. Query FEMA incrementally using lastRefresh
+3. Download in pages
+4. Stage every page
+5. Finalize dataset
+6. Update checkpoint
+"""
+
+from pathlib import Path
+import logging
 import requests
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-import logging
-from pathlib import Path
-import os
-import gc
 
-logging.basicConfig(level=logging.INFO)
-DATA_DIR = Path("data/raw")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+from direct_data_streaming.src.common.incremental_update import (
+    stage_chunk,
+    update_parquet,
+)
 
+from direct_data_streaming.src.common.checkpoint_manager import (
+    get_checkpoint,
+    update_checkpoint,
+)
 
-# =====================================================
-# CONFIG
-# =====================================================
-
-BASE_URL = "https://www.fema.gov/api/open"
-
-ENDPOINTS = {
-    "declarations": {
-        "url": "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries",
-        "select": [
-            "disasterNumber",
-            "state",
-            "incidentType",
-            "declarationDate"
-        ],
-    },
-
-    "public_assistance": {
-        "url": "https://www.fema.gov/api/open/v2/PublicAssistanceFundedProjectsDetails",
-        "select": [
-            "DisasterNumber",
-            "ProjectID",
-            "ProjectCategory",
-            "FederalShareObligated",
-            "State"
-        ],
-    },
-
-    "disaster_summaries": {
-        "url": "https://www.fema.gov/api/open/v1/FemaWebDisasterSummaries",
-        "select": [
-            "disasterNumber",
-            "state",
-            "incidentType"
-        ],
-    },
-}
-
-FIELDS = {
-    "declarations": [
-        "disasterNumber",
-        "state",
-        "incidentType",
-        "declarationDate",
-        "incidentBeginDate",
-        "incidentEndDate",
-        "declarationType",
-    ],
-
-    "public_assistance": [
-    "disasterNumber",
-    "projectCategory",
-    "obligatedAmount",
-],
-
-    
-    "disaster_summaries": None,
-}
-
-PAGE_SIZE = 1000
-DATA_DIR = Path("data/raw")
+# ============================================================
+# LOGGING
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
+logger = logging.getLogger(__name__)
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+PAGE_SIZE = 1000
+
+REQUEST_TIMEOUT = 60
+
+MAX_RETRIES = 3
+
 session = requests.Session()
 
-# =====================================================
-# HELPER
-# =====================================================
+# ============================================================
+# FEMA ENDPOINTS
+# ============================================================
+
+ENDPOINTS = {
+
+    "declarations": {
+
+        "url":
+        "https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries",
+
+        
+
+            "select": [
+    "id",
+    "hash",
+    "disasterNumber",
+    "state",
+    "incidentType",
+    "declarationDate",
+    "incidentBeginDate",
+    "incidentEndDate",
+    "declarationType",
+    "lastRefresh",
+]
+
+        
+
+    },
+
+    "public_assistance": {
+    "url": "https://www.fema.gov/api/open/v2/PublicAssistanceFundedProjectsDetails",
+    "select": [
+        "gmProjectId",
+        "disasterNumber",
+        "projectAmount",
+        "damageCategoryCode",
+        "damageCategoryDescrip",
+        "federalShareObligated",
+        "stateAbbreviation",
+        "lastRefresh",
+    ],
+},
+
+    "disaster_summaries": {
+
+        "url":
+        "https://www.fema.gov/api/open/v1/FemaWebDisasterSummaries",
+
+        "select": None,
+
+    },
+
+}
+
+# ============================================================
+# HELPERS
+# ============================================================
 
 
-
-def extract_records(payload):
+def extract_records(payload: dict):
     """
-    FEMA API responses contain:
-        metadata + dataset key
-    We must extract ONLY the dataset list.
+    FEMA datasets are wrapped inside
+    metadata objects.
+
+    Return only the dataset.
     """
 
-    for key, value in payload.items():
+    for value in payload.values():
+
         if isinstance(value, list):
+
             return value
 
     return []
 
 
-def append_to_parquet(df, dataset_name):
-    file_path = DATA_DIR / f"{dataset_name}.parquet"
+# ============================================================
+# DOWNLOAD ONE DATASET
+# ============================================================
 
-    # If file exists → append
-    if file_path.exists():
-        existing = pd.read_parquet(file_path)
-        df = pd.concat([existing, df], ignore_index=True)
 
-    df.to_parquet(file_path, index=False)
+def stream_endpoint(
+    dataset_name: str,
+    endpoint: dict,
+):
 
-# =====================================================
-# STREAMING WRITER
-# =====================================================
-
-def stream_endpoint(name, endpoint, fields):
+    logger.info("=" * 60)
+    logger.info(f"Dataset : {dataset_name}")
+    logger.info("=" * 60)
 
     url = endpoint["url"]
+
+    fields = endpoint["select"]
+
+    checkpoint = get_checkpoint(dataset_name)
+
+    latest_refresh = checkpoint
+
     params = {
-        "$top": 1000,
+
+        "$top": PAGE_SIZE,
+
         "$skip": 0,
+
     }
 
-    # Only add $select if fields exist
-    if fields:
-       params["$select"] = ",".join([
-    "DisasterNumber",
-    "ProjectID",
-    "ProjectCategory",
-    "FederalShareObligated",
-    "State"
-])
+    if checkpoint:
 
-    total = 0
+        logger.info(
+            f"Checkpoint : {checkpoint}"
+        )
+
+        params["$filter"] = (
+            f"lastRefresh gt '{checkpoint}'"
+        )
+
+        params["$orderby"] = (
+            "lastRefresh asc"
+        )
+
+    else:
+
+        logger.info(
+            "No checkpoint found."
+        )
+
+        logger.info(
+            "Running initial full ingestion."
+        )
+
+    if fields:
+
+        params["$select"] = ",".join(fields)
+
+    total_downloaded = 0
 
     while True:
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-        except requests.exceptions.HTTPError:
-            logging.warning(f"{name}: select failed → retrying without $select")
-            params.pop("$select", None)
 
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json().get("DisasterDeclarationsSummaries") \
-            or response.json().get("PublicAssistanceFundedProjectsDetails") \
-            or response.json().get("FemaWebDisasterSummaries") \
-            or response.json().get("value")
+        success = False
 
-        if not data:
+        for attempt in range(MAX_RETRIES):
+
+            try:
+
+                response = session.get(
+
+                    url,
+
+                    params=params,
+
+                    timeout=REQUEST_TIMEOUT,
+
+                )
+
+                response.raise_for_status()
+
+                success = True
+
+                break
+
+            except requests.RequestException as ex:
+
+                logger.warning(
+
+                    f"{dataset_name} "
+
+                    f"(attempt {attempt+1}) "
+
+                    f"{ex}"
+
+                )
+
+        if not success:
+
+            raise RuntimeError(
+
+                f"Unable to download "
+
+                f"{dataset_name}"
+
+            )
+
+        records = extract_records(
+            response.json()
+        )
+
+        if not records:
+
+            logger.info(
+                "No additional records found."
+            )
+
             break
 
-        df = pd.DataFrame(data)
+        df = pd.DataFrame(records)
 
-        append_to_parquet(df, name)
+        if df.empty:
 
-        total += len(df)
-        logging.info(f"{name}: wrote batch={len(df)} | total={total}")
+            break
 
-        params["$skip"] += 1000
+        if "lastRefresh" in df.columns:
 
-    logging.info(f"{name}: ingestion complete.")
+            latest_refresh = (
+                df["lastRefresh"].max()
+            )
 
-# =====================================================
-# MAIN PIPELINE
-# =====================================================
+        stage_chunk(
+
+            df=df,
+
+            dataset_name=dataset_name,
+
+        )
+
+        total_downloaded += len(df)
+
+        #logger.info(
+
+          #  f"Downloaded "
+
+           # f"{total_downloaded:,} "
+
+            #f"records")
+
+        del df
+
+        params["$skip"] += PAGE_SIZE
+
+    logger.info(
+    f"Finished downloading " f"{total_downloaded:,} records."
+    )
+
+    # =====================================================
+    # Merge staged chunks into production dataset
+    # =====================================================
+
+    stats = update_parquet(
+    dataset_name=dataset_name,
+)
+
+    # =====================================================
+    # Update checkpoint ONLY after successful merge
+    # =====================================================
+
+    if (
+        stats is not None
+        and latest_refresh is not None
+    ):
+
+        update_checkpoint(
+            dataset_name,
+            latest_refresh,
+        )
+
+        logger.info(
+            f"Checkpoint updated → "
+            f"{latest_refresh}"
+        )
+
+    logger.info(
+        f"{dataset_name} ingestion complete."
+    )
+
+
+# ============================================================
+# RUN ALL DATASETS
+# ============================================================
+
 def run_stream():
-    logging.info("===== MEMORY SAFE FEMA STREAM STARTED =====")
+    """
+    Execute incremental ingestion for all
+    configured FEMA datasets.
+    """
 
-    for name, endpoint in ENDPOINTS.items():
+    logger.info("=" * 70)
+    logger.info("FEMA Incremental Ingestion Started")
+    logger.info("=" * 70)
+
+    completed = 0
+    failed = 0
+
+    for dataset_name, endpoint in ENDPOINTS.items():
+
         try:
-            stream_endpoint(name, endpoint, FIELDS[name])
-        except Exception as e:
-            logging.error(f"{name} failed → {e}")
-            continue
 
-    logging.info("===== INGESTION COMPLETE =====")   
+            stream_endpoint(
+                dataset_name=dataset_name,
+                endpoint=endpoint,
+            )
+
+            completed += 1
+
+        except Exception as ex:
+
+            failed += 1
+
+            logger.exception(
+                f"{dataset_name} failed: {ex}"
+            )
+
+    logger.info("=" * 70)
+    logger.info("INGESTION SUMMARY")
+    logger.info("=" * 70)
+    logger.info(f"Successful datasets : {completed}")
+    logger.info(f"Failed datasets     : {failed}")
+    logger.info("=" * 70)
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
+    """
+    Entry point.
+    """
+
     run_stream()
 
+
 if __name__ == "__main__":
-        main() 
+    main()
