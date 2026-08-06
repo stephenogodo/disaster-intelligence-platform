@@ -122,3 +122,12 @@ feature_store/
 ~$*.docx
 ~$*.xlsx
 ~$*.pptx
+
+#==========================================================
+#Datasets
+#==========================================================
+data/raw/*.parquet
+
+data/processed/*.parquet
+
+features.csv
