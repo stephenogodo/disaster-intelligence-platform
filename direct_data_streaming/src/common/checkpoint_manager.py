@@ -39,23 +39,24 @@ CHECKPOINT_FILE = (
 # ============================================================
 # DEFAULT CHECKPOINT STRUCTURE
 # ============================================================
-
 DEFAULT_CHECKPOINT = {
 
     "declarations": {
-        "lastRefresh": None
+        "lastRefresh": None,
+        "lastKey": None,
     },
 
     "public_assistance": {
-        "lastRefresh": None
+        "lastRefresh": None,
+        "lastKey": None,
     },
 
     "disaster_summaries": {
-        "lastRefresh": None
+        "lastRefresh": None,
+        "lastKey": None,
     }
 
 }
-
 
 # ============================================================
 # INTERNAL FUNCTIONS
@@ -163,6 +164,67 @@ def update_checkpoint(
 
     checkpoint[dataset_name] = {
         "lastRefresh": timestamp
+    }
+
+    save_checkpoint(checkpoint)
+
+
+def get_cursor(dataset_name):
+    """
+    Return the complete cursor for a dataset.
+
+    {
+        "lastRefresh": "...",
+        "lastKey": "..."
+    }
+    """
+
+    checkpoint = load_checkpoint()
+
+    if dataset_name not in checkpoint:
+
+        checkpoint[dataset_name] = {
+            "lastRefresh": None,
+            "lastKey": None,
+        }
+
+        save_checkpoint(checkpoint)
+
+    # Backward compatibility with old checkpoint files
+    checkpoint[dataset_name].setdefault("lastKey", None)
+
+    return checkpoint[dataset_name]
+
+
+def update_cursor(
+    dataset_name,
+    last_refresh,
+    last_key,
+):
+    """
+    Update the complete cursor.
+    """
+
+    checkpoint = load_checkpoint()
+
+    checkpoint[dataset_name] = {
+        "lastRefresh": last_refresh,
+        "lastKey": str(last_key) if last_key is not None else None,
+    }
+
+    save_checkpoint(checkpoint)
+
+
+def reset_cursor(dataset_name):
+    """
+    Reset one dataset cursor.
+    """
+
+    checkpoint = load_checkpoint()
+
+    checkpoint[dataset_name] = {
+        "lastRefresh": None,
+        "lastKey": None,
     }
 
     save_checkpoint(checkpoint)

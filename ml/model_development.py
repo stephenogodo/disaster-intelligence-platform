@@ -13,8 +13,12 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import xgboost as xgb
 
+from storage.config import (PROJECT_ROOT, PROCESSED_DATA_DIR)
+from storage.config import PROCESSED_DATA_DIR
 # ── Paths ──────────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).resolve().parent.parent
+#BASE_DIR = Path(__file__).resolve().parent.parent
+data_path = PROCESSED_DATA_DIR / "features.csv"
+
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 LOG_DIR = Path(__file__).resolve().parent / "logs"
@@ -29,7 +33,8 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
+logger.info(f"Loading data from {data_path}")
+df = pd.read_csv(data_path, low_memory=False)
 # ── Constants ──────────────────────────────────────────────────────────────────
 FEATURES = [
     "region_encoded", "incident_duration_days", "days_to_declaration",
@@ -121,11 +126,13 @@ def train_baseline_and_log(name, model, params, X_train, X_test, y_train, y_test
 # ── Main ───────────────────────────────────────────────────────────────────────
 def run():
     logger.info("=== Model Development Started (with hyperparameter tuning) ===")
+    data_path = PROCESSED_DATA_DIR / "features.csv"
 
-    data_path = BASE_DIR / "direct_data_streaming" / "data" / "processed" / "features.csv"
     logger.info(f"Loading data from {data_path}")
+
     df = pd.read_csv(data_path, low_memory=False)
-    logger.info(f"Dataset shape: {df.shape}")
+
+    logger.info("=== Model Development Started (with hyperparameter tuning) ===")
 
     df = df.dropna(subset=[TARGET])
     available_features = [f for f in FEATURES if f in df.columns]
@@ -143,7 +150,9 @@ def run():
     )
     logger.info(f"Train size: {len(X_train)} | Test size: {len(X_test)}")
 
-    db_uri = f"sqlite:///{(BASE_DIR / 'mlflow.db').as_posix()}"
+    MLFLOW_DB = PROJECT_ROOT / "mlflow.db"
+
+    db_uri = f"sqlite:///{MLFLOW_DB.as_posix()}"
     logger.info(f"MLflow tracking URI: {db_uri}")
     mlflow.set_tracking_uri(db_uri)
     mlflow.set_experiment("FEMA_Cost_Forecasting")
@@ -200,7 +209,8 @@ def run():
     logger.info(f"Best model: [{best_name}] with R²={all_results[best_name]['r2']}")
 
     # --- Save ---
-    model_dir = BASE_DIR / "models"
+    model_dir = PROJECT_ROOT / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(exist_ok=True)
     joblib.dump(best_model, model_dir / "best_model.pkl")
     joblib.dump(available_features, model_dir / "feature_columns.pkl")
