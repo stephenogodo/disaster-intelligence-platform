@@ -56,12 +56,28 @@ BACKOFF_FACTOR = 2
 # KAFKA SETTINGS
 # =====================================================
 
+# =====================================================
+# KAFKA SETTINGS
+# =====================================================
+
 KAFKA_BOOTSTRAP = "localhost:9092"
+
+# Alias used by the Kafka Consumer
+KAFKA_BOOTSTRAP_SERVERS = KAFKA_BOOTSTRAP
 
 KAFKA_TOPIC = "fema_raw"
 
 KAFKA_GROUP = "fema-stream"
 
+# Alias used by the Kafka Consumer
+KAFKA_GROUP_ID = KAFKA_GROUP
+
+# Consumer settings
+KAFKA_POLL_TIMEOUT_MS = 1000
+
+KAFKA_MAX_BATCH_SIZE = 1000
+
+SCHEMA_VERSION = "2.0"
 # =====================================================
 # DATASETS
 # =====================================================
@@ -81,7 +97,9 @@ ENDPOINTS = {
             "incidentEndDate",
             "declarationType",
             "lastRefresh",
-        ],
+            ],
+            "key_field": "disasterNumber",
+            "checkpoint_field": "lastRefresh",
     },
 
     "public_assistance": {
@@ -95,7 +113,9 @@ ENDPOINTS = {
             "federalShareObligated",
             "stateAbbreviation",
             "lastRefresh",
-        ],
+           ],
+           "key_field": "gmProjectId",
+           "checkpoint_field": "lastRefresh",
     },
 
     "disaster_summaries": {
@@ -105,6 +125,8 @@ ENDPOINTS = {
             "hash",
             "disasterNumber",
             "lastRefresh",
-        ],
-    },
+           ],
+          "key_field": "disasterNumber",
+          "checkpoint_field": "lastRefresh",
+} 
 }

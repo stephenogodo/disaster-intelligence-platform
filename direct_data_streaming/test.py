@@ -1,4 +1,15 @@
 import pandas as pd
-df = pd.read_csv("direct_data_streaming/data/processed/features.csv")
-for col in ["incident_severity_score", "incident_duration_days", "days_to_declaration", "state_disaster_frequency"]:
-    print(col, "->", df[col].
+
+for name in [
+    "declarations",
+    "public_assistance",
+    "disaster_summaries",
+]:
+    path = f"direct_data_streaming/data/raw/{name}.parquet"
+    df = pd.read_parquet(path)
+
+    print("=" * 70)
+    print(name)
+    print(df.shape)
+    print(df.head(3))
+    print(df.dtypes)

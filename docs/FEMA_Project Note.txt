@@ -1,0 +1,495 @@
+Docker image: apache/kafka:4.1.2.
+Docker Native image: apache/kafka:4.1.2.
+
+Kafka streaming
+✅ Feature Store
+✅ Online inference
+✅ Continuous training
+✅ Real-time predictions API
+
+Your Kafka → Feast consumer will:
+
+✅ Read FEMA events from Kafka
+✅ Merge multiple FEMA datasets
+✅ Aggregate funding (obligatedAmount)
+✅ Build ML features
+✅ Write features.csv
+✅ Push features into Feast
+✅ Update Redis online feature store
+
+
+
+This version includes:
+
+✅ multi-dataset ingestion
+✅ schema filtering
+✅ structured events
+✅ retry/backoff handling
+✅ clean shutdown
+✅ pagination safety
+✅ logging
+✅ Kafka partition keys
+✅ rate limiting
+✅ extensible config
+✅ production robustness
+
+
+FEATURE ENGINEERING STRATEGY (YOUR LEVEL)
+
+This function now creates:
+
+Feature Type	Examples
+Time-based	duration_days, month, season
+Risk-based	state_risk_score
+Economic	log_cost, cost_per_day
+Frequency	state_disaster_frequency
+Categorical	incidenttype_*
+
+3. Feature richness
+
+You now have:
+
+Temporal features
+Risk scoring
+Cost behavior
+Frequency signals
+Seasonality
+Encoded categorical variables
+
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.models import Variable
+from datetime import datetime, timedelta
+import logging
+import pandas as pd
+
+from scripts.extract import fetch_all
+from scripts.transform import clean_data
+from scripts.features import build_features
+
+# -----------------------------------
+# CONFIG
+# -----------------------------------
+default_args = {
+    "owner": "airflow",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+}
+
+DATA_PATH = "/opt/airflow/data"
+
+logger = logging.getLogger(__name__)
+
+# -----------------------------------
+# TASK 1: EXTRACT
+# -----------------------------------
+def extract_task(**context):
+
+    url = Variable.get("FEMA_API_URL")
+
+    logger.info("Starting data extraction...")
+
+    data = fetch_all(url)
+
+    if not data or not any(data.values()):
+        raise ValueError("No data fetched from FEMA API")
+
+    file_paths = {}
+
+    execution_date = context["ds"]
+
+    for key, records in data.items():
+
+        if not records:
+            logger.warning(f"No records for {key}")
+            continue
+
+        df = pd.DataFrame(records)
+
+        file_path = f"{DATA_PATH}/{key}_raw_{execution_date}.parquet"
+
+        df.to_parquet(file_path)
+
+        logger.info(f"Saved {key} raw data: {file_path}")
+
+        file_paths[key] = file_path
+
+    return file_paths
+
+
+# -----------------------------------
+# TASK 2: TRANSFORM
+# -----------------------------------
+def transform_task(**context):
+
+    ti = context["ti"]
+
+    file_paths = ti.xcom_pull(task_ids="extract")
+
+    cleaned_paths = {}
+
+    execution_date = context["ds"]
+
+    for key, raw_path in file_paths.items():
+
+        logger.info(f"Processing {key} from {raw_path}")
+
+        df = pd.read_parquet(raw_path)
+
+        df = clean_data(df)
+
+        if df.empty:
+            logger.warning(f"Empty dataframe after cleaning for {key}")
+            continue
+
+        clean_path = f"{DATA_PATH}/{key}_clean_{execution_date}.parquet"
+
+        df.to_parquet(clean_path)
+
+        logger.info(f"Saved cleaned data: {clean_path}")
+
+        cleaned_paths[key] = clean_path
+
+    return cleaned_paths
+
+
+# -----------------------------------
+# TASK 3: FEATURE ENGINEERING
+# -----------------------------------
+def feature_task(**context):
+
+    ti = context["ti"]
+
+    file_paths = ti.xcom_pull(task_ids="transform")
+
+    execution_date = context["ds"]
+
+    for key, clean_path in file_paths.items():
+
+        logger.info(f"Building features for {key}")
+
+        df = pd.read_parquet(clean_path)
+
+        df = build_features(df)
+
+        if df.empty:
+            logger.warning(f"No features generated for {key}")
+            continue
+
+        # Use DAG execution date for consistency
+        df["event_timestamp"] = pd.to_datetime(execution_date)
+
+        feature_path = f"{DATA_PATH}/{key}_features_{execution_date}.parquet"
+
+        df.to_parquet(feature_path)
+
+        logger.info(f"Saved features: {feature_path}")
+
+
+# -----------------------------------
+# DAG DEFINITION
+# -----------------------------------
+with DAG(
+    dag_id="fema_pipeline",
+    default_args=default_args,
+    description="FEMA ETL + Feature Pipeline",
+    start_date=datetime(2024, 1, 1),
+    schedule_interval="@daily",
+    catchup=False,
+    tags=["fema", "ml", "production"],
+) as dag:
+
+    extract = PythonOperator(
+        task_id="extract",
+        python_callable=extract_task,
+    )
+
+    transform = PythonOperator(
+        task_id="transform",
+        python_callable=transform_task,
+    )
+
+    features = PythonOperator(
+        task_id="features",
+        python_callable=feature_task,
+    )
+
+    extract >> transform >> featuress
+
+
+==================================================================================================================
+Extract Task (UPDATED)
+def extract_task(**context):
+
+    from airflow.models import Variable
+    import pandas as pd
+
+    last_run = Variable.get("fema_last_run", default_var=None)
+
+    data = fetch_all("FEMA_URL", last_run)
+
+    # Save separately
+    pd.DataFrame(data["declarations"]).to_parquet("/opt/airflow/data/declarations.parquet")
+    pd.DataFrame(data["public_assistance"]).to_parquet("/opt/airflow/data/public_assistance.parquet")
+
+    # Update last run timestamp
+    Variable.set("fema_last_run", datetime.utcnow().isoformat())
+
+=================================================================================================================================
+📁 UPDATED fetch_all (INCREMENTAL VERSION)
+import requests
+import time
+import logging
+from datetime import datetime
+from typing import Dict, List
+
+# -----------------------------------
+# CONFIG
+# -----------------------------------
+DEFAULT_TIMEOUT = 30
+MAX_RETRIES = 3
+SLEEP_BETWEEN_REQUESTS = 0.2
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# -----------------------------------
+# HELPER: RETRIES
+# -----------------------------------
+def _fetch_with_retries(url: str, params: Dict) -> Dict:
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+
+            if response.status_code == 200:
+                return response.json()
+
+            logger.warning(f"HTTP {response.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Request error: {e}")
+
+        time.sleep(2 ** attempt)
+
+    raise RuntimeError(f"Failed after retries: {url}")
+
+
+# -----------------------------------
+# PAGINATED FETCH WITH FILTER
+# -----------------------------------
+def _fetch_paginated(base_url: str, endpoint: str, last_run: str = None) -> List[Dict]:
+
+    all_records = []
+    offset = 0
+    limit = 1000
+
+    logger.info(f"Fetching {endpoint} since {last_run}")
+
+    while True:
+
+        params = {
+            "$limit": limit,
+            "$offset": offset,
+        }
+
+        # -----------------------------------
+        # INCREMENTAL FILTER (KEY PART)
+        # -----------------------------------
+        if last_run:
+            params["$filter"] = f"lastRefreshDate ge '{last_run}'"
+
+        url = f"{base_url}{endpoint}"
+
+        data = _fetch_with_retries(url, params)
+
+        records = data.get("DisasterDeclarationsSummaries") \
+            or data.get("PublicAssistanceFundedProjectsDetails") \
+	    or "FemaWebDisasterSummaries")\
+            or []
+
+        if not records:
+            break
+
+        all_records.extend(records)
+
+        logger.info(f"Fetched {len(records)} records")
+
+        if len(records) < limit:
+            break
+
+        offset += limit
+        time.sleep(SLEEP_BETWEEN_REQUESTS)
+
+    return all_records
+
+
+
+
+# -----------------------------------
+# MAIN INCREMENTAL FUNCTION
+# -----------------------------------
+def fetch_all(base_url: str, last_run: str = None) -> Dict[str, List[Dict]]:
+
+    results = {}
+
+    endpoints = {
+        "declarations": "/v2/DisasterDeclarationsSummaries",
+        "public_assistance": "/v2/PublicAssistanceFundedProjectsDetails",
+	"disaster_summaries": "/v1/FemaWebDisasterSummaries"
+    }
+
+    for name, endpoint in endpoints.items():
+
+        try:
+            records = _fetch_paginated(base_url, endpoint, last_run)
+            results[name] = records
+
+        except Exception as e:
+            logger.error(f"Error fetching {name}: {e}")
+            results[name] = []
+
+    return results
+
+
+===OPTIONAL ELITE UPGRADE====
+
+If you want to go top-tier, we can:
+
+Add async requests (10x faster ingestion)
+Add rate-limit detection
+Add incremental ingestion (only new FEMA data)
+Add schema validation (Great Expectations)
+
+============================================================================================
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.models import Variable
+from datetime import datetime, timedelta
+import logging
+import pandas as pd
+
+from scripts.extract import fetch_all
+from scripts.transform import clean_data
+from scripts.features import build_features
+
+# -----------------------------------
+# DEFAULT CONFIG
+# -----------------------------------
+default_args = {
+    "owner": "airflow",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+}
+
+DATA_PATH = "/opt/airflow/data"
+
+# -----------------------------------
+# TASKS
+# -----------------------------------
+def extract_task(**context):
+
+    logger = logging.getLogger(__name__)
+
+    url = Variable.get("FEMA_API_URL")
+
+    logger.info("Fetching FEMA data...")
+
+    data = fetch_all(url)
+
+    df = pd.DataFrame(data)
+
+    execution_date = context["ds"]
+
+    file_path = f"{DATA_PATH}/raw_{execution_date}.parquet"
+
+    df.to_parquet(file_path)
+
+    logger.info(f"Saved raw data: {file_path}")
+
+    return file_path
+
+
+def transform_task(**context):
+
+    logger = logging.getLogger(__name__)
+
+    ti = context["ti"]
+
+    raw_path = ti.xcom_pull(task_ids="extract")
+
+    logger.info(f"Reading raw data from {raw_path}")
+
+    df = pd.read_parquet(raw_path)
+
+    df = clean_data(df)
+
+    execution_date = context["ds"]
+
+    clean_path = f"{DATA_PATH}/clean_{execution_date}.parquet"
+
+    df.to_parquet(clean_path)
+
+    logger.info(f"Saved clean data: {clean_path}")
+
+    return clean_path
+
+
+def feature_task(**context):
+
+    logger = logging.getLogger(__name__)
+
+    ti = context["ti"]
+
+    clean_path = ti.xcom_pull(task_ids="transform")
+
+    df = pd.read_parquet(clean_path)
+
+    df = build_features(df)
+
+    # Add timestamp for Feast compatibility
+    df["event_timestamp"] = pd.Timestamp.now()
+
+    execution_date = context["ds"]
+
+    feature_path = f"{DATA_PATH}/features_{execution_date}.parquet"
+
+    df.to_parquet(feature_path)
+
+    logger.info(f"Saved features: {feature_path}")
+
+    return feature_path
+
+
+# -----------------------------------
+# DAG DEFINITION
+# -----------------------------------
+with DAG(
+    "fema_pipeline",
+    default_args=default_args,
+    start_date=datetime(2024, 1, 1),
+    schedule_interval="@daily",
+    catchup=False,
+    tags=["fema", "ml", "pipeline"],
+) as dag:
+
+    extract = PythonOperator(
+        task_id="extract",
+        python_callable=extract_task,
+        provide_context=True,
+    )
+
+    transform = PythonOperator(
+        task_id="transform",
+        python_callable=transform_task,
+        provide_context=True,
+    )
+
+    features = PythonOperator(
+        task_id="features",
+        python_callable=feature_task,
+        provide_context=True,
+    )
+
+    extract >> transform >> features
