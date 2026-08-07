@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
+STAGING_DIR = DATA_DIR / "staging"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 
 METADATA_DIR = PROJECT_ROOT / "metadata"
@@ -28,6 +29,7 @@ for directory in (
     DATA_DIR,
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
+    STAGING_DIR,
     METADATA_DIR,
     LOG_DIR,
     MODELS_DIR,
