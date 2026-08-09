@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+import time
 
 from orchestration.service_status import ServiceStatus
 from orchestration.services.base_service import BaseService
@@ -34,10 +35,18 @@ class KafkaService(BaseService):
 
         return "Kafka Streaming"
 
+    @property
+    def service_type(self) -> str:
+
+        return "stream"
+
     def start(self) -> None:
 
         self._status = ServiceStatus.STARTING
 
+        #
+        # Start Kafka Consumer
+        #
         logger.info("Starting Kafka consumer...")
 
         self._consumer_process = subprocess.Popen(
@@ -48,6 +57,18 @@ class KafkaService(BaseService):
             ]
         )
 
+        #
+        # Give the consumer time to subscribe
+        #
+        logger.info(
+            "Waiting for Kafka consumer to initialise..."
+        )
+
+        time.sleep(2)
+
+        #
+        # Start Kafka Producer
+        #
         logger.info("Starting Kafka producer...")
 
         self._producer_process = subprocess.Popen(
@@ -61,25 +82,45 @@ class KafkaService(BaseService):
         self._status = ServiceStatus.RUNNING
 
         #
-        # Wait for both processes.
+        # Wait for the producer to finish
         #
         self._producer_process.wait()
+
+        logger.info(
+            "Kafka producer finished."
+        )
+
+        #
+        # Stop the consumer
+        #
+        logger.info(
+            "Stopping Kafka consumer..."
+        )
+
+        self._consumer_process.terminate()
+
         self._consumer_process.wait()
 
-    @property
-    def service_type(self) -> str:
-        return "stream"
+        logger.info(
+            "Kafka consumer stopped."
+        )
+
+        self._status = ServiceStatus.STOPPED
 
     def stop(self) -> None:
 
         self._status = ServiceStatus.STOPPING
 
-        if self._producer_process:
-
+        if (
+            self._producer_process
+            and self._producer_process.poll() is None
+        ):
             self._producer_process.terminate()
 
-        if self._consumer_process:
-
+        if (
+            self._consumer_process
+            and self._consumer_process.poll() is None
+        ):
             self._consumer_process.terminate()
 
         self._status = ServiceStatus.STOPPED

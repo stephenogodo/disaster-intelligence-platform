@@ -57,17 +57,11 @@ class PlatformRunner:
 
                 service.start()
 
-                if service.service_type == "batch":
-                    logger.info(
-                        "%s completed successfully.",
-                        service.name,
-                    )
-                else:
-                    logger.info(
-                        "%s is running.",
-                        service.name,
-                    )
-
+            logger.info(
+                "%s completed successfully.",
+                service.name,
+)        
+                  
             logger.info(
                 "Platform execution completed successfully."
             )
