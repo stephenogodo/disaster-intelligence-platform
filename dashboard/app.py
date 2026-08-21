@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 #API_URL = "http://127.0.0.1:8000"
 import os
 API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000")
+MODEL_VERSION = os.environ.get("MODEL_VERSION", "B").strip().upper()
 
 st.set_page_config(page_title="FEMA Cost Forecaster", layout="wide", page_icon="🌪️")
 
@@ -62,12 +63,40 @@ incident_options = {
 # ── Sidebar: Scenario Inputs ──────────────────────────────────────────────────
 st.sidebar.header("📋 Scenario Parameters")
 
+model_choice = st.sidebar.selectbox(
+    "Forecast Model",
+    options=["B", "A"],
+    format_func=lambda value: (
+        "Model B — Early Forecast"
+        if value == "B"
+        else "Model A — Standard Forecast"
+    ),
+    index=0 if MODEL_VERSION == "B" else 1,
+)
+
+st.sidebar.caption(
+    "Model B forecasts without incident duration. "
+    "Model A uses incident duration for standard forecasting."
+)
+
 selected_incidents = st.sidebar.multiselect(
     "Incident Type(s)", list(incident_options.keys()), default=["Hurricane", "Flood"]
 )
 
 region = st.sidebar.slider("FEMA Region (encoded)", 0, 9, 4)
-duration = st.sidebar.slider("Incident Duration (days)", 1, 180, 14)
+if model_choice == "A":
+    duration = st.sidebar.slider(
+        "Incident Duration (days)",
+        1,
+        180,
+        14,
+    )
+else:
+    duration = None
+    st.sidebar.info(
+        "Model B: incident duration is not required for an early forecast."
+    )
+
 days_to_decl = st.sidebar.slider("Days to Declaration", 0, 60, 7)
 frequency = st.sidebar.slider("State Disaster Frequency (prior events)", 0, 100, 12)
 
@@ -85,7 +114,8 @@ st.sidebar.caption(
 )
 severity = st.sidebar.slider("Incident Severity Score", 0.0, 1.0, float(suggested), step=0.05)
 
-decl_date = st.sidebar.date_input("Declaration Date", datetime(2026, 9, 1))
+
+decl_date = st.sidebar.date_input("Declaration Date", datetime.now().date(),)
 
 st.sidebar.divider()
 predict_clicked = st.sidebar.button("🔮 Forecast Recovery Cost", use_container_width=True)
@@ -94,7 +124,6 @@ predict_clicked = st.sidebar.button("🔮 Forecast Recovery Cost", use_container
 def build_payload():
     payload = {
         "region_encoded": region,
-        "incident_duration_days": duration,
         "days_to_declaration": days_to_decl,
         "state_disaster_frequency": frequency,
         "incident_severity_score": severity,
@@ -102,8 +131,15 @@ def build_payload():
         "declaration_month": decl_date.month,
         "declaration_quarter": (decl_date.month - 1) // 3 + 1,
     }
+
+    # Model A requires incident duration.
+    # Model B intentionally does not receive it.
+    if model_choice == "A":
+        payload["incident_duration_days"] = duration
+
     for label, field in incident_options.items():
         payload[field] = 1 if label in selected_incidents else 0
+
     return payload
 
 
@@ -115,7 +151,12 @@ if predict_clicked:
     logger.info(f"Sending prediction request: {payload}")
 
     try:
-        response = requests.post(f"{API_URL}/predict-cost", json=payload, timeout=10)
+        response = requests.post(
+            f"{API_URL}/predict-cost",
+            json=payload,
+            headers={"X-Model-Version": model_choice},
+            timeout=10,
+        )
         response.raise_for_status()
         result = response.json()
         logger.info(f"Prediction received: {result}")
@@ -124,7 +165,11 @@ if predict_clicked:
 
         with col1:
             st.success(f"### 💰 Predicted Recovery Cost: **${cost:,.0f}**")
-            st.caption(f"Model: {result['model_type']} | Generated: {result['timestamp']}")
+            st.caption(
+                f"Model: {result['model_type']} | "
+                f"Forecast: {result.get('forecast_type', 'Unknown')} | "
+                f"Generated: {result['timestamp']}"
+            )
 
             st.subheader("📊 Budget Gap Analysis")
             st.markdown("How a funding gap would look under different budget allocation scenarios:")

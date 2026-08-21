@@ -1,14 +1,65 @@
+# Python / virtual environments
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
-direct_data_streaming/data/raw/
-direct_data_streaming/data/processed/
-direct_data_streaming/src/ingestion/logs/
-ml/logs/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Logs / runtime artifacts
+*.log
 api/logs/
 dashboard/logs/
-mlflow.db
+ml/logs/
+data_ingestion/logs/
+airflow/logs/
+
+# MLflow
 mlruns/
+mlflow.db
+
+# Local/generated model-development artifacts
 reports/
-.git/
+notebooks/
+
+# Raw and processed datasets
+data/raw/
+data/processed/
+data/staging/
+
+# Metadata/runtime state
+metadata/
+data/metadata/
+
+# Kafka experimental runtime artifacts
+data_ingestion/kafka/__pycache__/
+
+# Archive / obsolete material
+archive/
+
+# Environment / local configuration
+.env
+*.env.local
+*.env.production
+
+# Temporary files
+*.tmp
+*.bak
+tmp/
+temp/
+
+# Documentation
 *.md
+docs/
+
+# OS / IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

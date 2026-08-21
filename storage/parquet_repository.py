@@ -437,24 +437,30 @@ class ParquetRepository:
         self,
         dataset: str,
         records: list[dict[str, Any]],
-    ) -> dict[str, Any]:
+        ) -> dict[str, Any]:
         """
         Append raw FEMA records.
 
-        Parameters
-        ----------
-        dataset
-            Dataset identifier.
+        The repository preserves the existing update semantics:
 
-        records
-            Raw FEMA payloads.
+        * New primary keys are appended.
+        * Existing primary keys are replaced by the incoming record.
+        * Duplicate incoming records are resolved using the
+        most recently received record.
+        * If the incoming records are completely identical to
+        records already persisted, the Parquet file is not rewritten.
 
-        Returns
-        -------
-        Dictionary containing repository statistics.
+        This optimisation is particularly important for Kafka replay,
+        where batches may contain records that have already been
+        persisted.
         """
 
+        self._validate_dataset(dataset)
         self._validate_records(records)
+
+        existing = self.load(dataset)
+
+        existing_rows = len(existing)
 
         if not records:
 
@@ -465,10 +471,10 @@ class ParquetRepository:
 
             return {
                 "dataset": dataset,
-                "existing": self.row_count(dataset),
+                "existing": existing_rows,
                 "incoming": 0,
                 "duplicates": 0,
-                "total": self.row_count(dataset),
+                "total": existing_rows,
                 "file_size_mb": self.file_size_mb(dataset),
             }
 
@@ -484,10 +490,6 @@ class ParquetRepository:
                 f"'{key_field}'."
             )
 
-        existing = self.load(dataset)
-
-        existing_rows = len(existing)
-
         incoming_rows = len(incoming)
 
         logger.info(
@@ -497,26 +499,254 @@ class ParquetRepository:
             incoming_rows,
         )
 
+        #
+        # Resolve duplicate keys inside the incoming batch first.
+        #
+        incoming, incoming_duplicates = self.deduplicate(
+            dataset,
+            incoming,
+        )
+
+        #
+        # If there is no existing dataset, this is a pure insert.
+        #
         if existing.empty:
 
-            merged = incoming
-
-        else:
-
-            merged = pd.concat(
-                [
-                    existing,
-                    incoming,
-                ],
-                ignore_index=True,
-                copy=False,
+            self.save(
+                dataset,
+                incoming,
             )
+
+            file_size = self.file_size_mb(dataset)
+
+            stats = {
+                "dataset": dataset,
+                "existing": existing_rows,
+                "incoming": incoming_rows,
+                "duplicates": incoming_duplicates,
+                "total": len(incoming),
+                "file_size_mb": file_size,
+            }
+
+            logger.info(
+                "%s | Append complete "
+                "(%d total rows, %d duplicates removed).",
+                dataset,
+                stats["total"],
+                incoming_duplicates,
+            )
+
+            return stats
+
+        #
+        # Ensure the existing dataset contains the configured key.
+        #
+        if key_field not in existing.columns:
+
+            raise KeyError(
+                f"{dataset}: existing dataset does not contain "
+                f"required key field '{key_field}'."
+            )
+
+        #
+        # Determine which incoming keys already exist.
+        #
+        existing_keys = set(
+            existing[key_field].dropna().tolist()
+        )
+
+        incoming_keys = set(
+            incoming[key_field].dropna().tolist()
+        )
+
+        existing_incoming_keys = (
+            incoming_keys.intersection(existing_keys)
+        )
+
+        new_keys = (
+            incoming_keys.difference(existing_keys)
+        )
+
+        #
+        # Fast-path analysis:
+        #
+        # If every incoming key already exists, determine whether
+        # the incoming records are genuinely identical to the
+        # persisted records.
+        #
+        if (
+            not new_keys
+            and existing_incoming_keys
+        ):
+
+            existing_matching = existing[
+                existing[key_field].isin(
+                    existing_incoming_keys
+                )
+            ].copy()
+
+            incoming_matching = incoming[
+                incoming[key_field].isin(
+                    existing_incoming_keys
+                )
+            ].copy()
+
+            #
+            # Align both dataframes by primary key.
+            #
+            existing_matching = (
+                existing_matching
+                .set_index(key_field)
+                .sort_index()
+            )
+
+            incoming_matching = (
+                incoming_matching
+                .set_index(key_field)
+                .sort_index()
+            )
+
+            #
+            # Compare only columns shared by both datasets.
+            #
+            common_columns = [
+                column
+                for column in incoming_matching.columns
+                if column in existing_matching.columns
+            ]
+
+            identical = False
+
+            if (
+                len(existing_matching)
+                == len(incoming_matching)
+                and set(existing_matching.index)
+                == set(incoming_matching.index)
+                and common_columns
+            ):
+
+                left = existing_matching[
+                    common_columns
+                ].copy()
+
+                right = incoming_matching[
+                    common_columns
+                ].copy()
+
+                #
+                # Compare values while treating NaN/None
+                # in corresponding positions as equal.
+                #
+                try:
+
+                    identical = bool(
+                        left.equals(right)
+                    )
+
+                except Exception:
+
+                    identical = False
+
+            #
+            # All incoming records already exist and are identical.
+            #
+            if identical:
+
+                logger.info(
+                    "%s | Incoming batch is identical to "
+                    "persisted records. Skipping Parquet rewrite.",
+                    dataset,
+                )
+
+                stats = {
+                    "dataset": dataset,
+                    "existing": existing_rows,
+                    "incoming": incoming_rows,
+                    "duplicates": incoming_rows,
+                    "total": existing_rows,
+                    "file_size_mb": self.file_size_mb(dataset),
+                }
+
+                logger.info(
+                    "%s | Append complete "
+                    "(no write required; %d duplicate records).",
+                    dataset,
+                    incoming_rows,
+                )
+
+                return stats
+
+        #
+        # At least one incoming record is either:
+        #
+        #   * genuinely new, or
+        #   * an update to an existing record.
+        #
+        # Preserve the existing repository semantics by merging
+        # and retaining the latest occurrence of each key.
+        #
+        merged = pd.concat(
+            [
+                existing,
+                incoming,
+            ],
+            ignore_index=True,
+            copy=False,
+        )
 
         merged, duplicates_removed = self.deduplicate(
             dataset,
             merged,
         )
 
+        #
+        # Only write when the resulting dataset actually changes.
+        #
+        if len(merged) == existing_rows:
+
+            #
+            # A same-sized merge can still represent an update.
+            # Compare the resulting dataframe with the existing
+            # dataframe before deciding whether a write is needed.
+            #
+            comparable_columns = [
+                column
+                for column in existing.columns
+                if column in merged.columns
+            ]
+
+            existing_compare = existing[
+                comparable_columns
+            ].reset_index(drop=True)
+
+            merged_compare = merged[
+                comparable_columns
+            ].reset_index(drop=True)
+
+            if existing_compare.equals(
+                merged_compare
+            ):
+
+                logger.info(
+                    "%s | Merge produced no data changes. "
+                    "Skipping Parquet rewrite.",
+                    dataset,
+                )
+
+                stats = {
+                    "dataset": dataset,
+                    "existing": existing_rows,
+                    "incoming": incoming_rows,
+                    "duplicates": duplicates_removed,
+                    "total": existing_rows,
+                    "file_size_mb": self.file_size_mb(dataset),
+                }
+
+                return stats
+
+        #
+        # Persist only when the dataset actually changed.
+        #
         self.save(
             dataset,
             merged,
@@ -542,8 +772,7 @@ class ParquetRepository:
         )
 
         return stats
-
-    # ======================================================
+    # ======================================================                                                                                                                                                                                                                                                                                      # ======================================================
     # STORAGE STATISTICS
     # ======================================================
 

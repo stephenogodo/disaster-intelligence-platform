@@ -77,7 +77,10 @@ ENDPOINTS = {
             "incidentBeginDate",
             "incidentEndDate",
             "declarationType",
+            "fipsStateCode",
+            "fipsCountyCode",
             "lastRefresh",
+
         ],
     },
 
@@ -396,4 +399,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+

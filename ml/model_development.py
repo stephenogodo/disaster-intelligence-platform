@@ -14,9 +14,7 @@ from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import xgboost as xgb
 
 from storage.config import (PROJECT_ROOT, PROCESSED_DATA_DIR)
-from storage.config import PROCESSED_DATA_DIR
 # ── Paths ──────────────────────────────────────────────────────────────────────
-#BASE_DIR = Path(__file__).resolve().parent.parent
 data_path = PROCESSED_DATA_DIR / "features.csv"
 
 
@@ -33,13 +31,11 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-logger.info(f"Loading data from {data_path}")
-df = pd.read_csv(data_path, low_memory=False)
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 FEATURES = [
     "region_encoded", "incident_duration_days", "days_to_declaration",
-    "state_disaster_frequency", "incident_severity_score",
-    "declaration_year",
+    "state_disaster_frequency", "incident_severity_score", "declaration_year",
     "declaration_month_sin", "declaration_month_cos",
     "declaration_quarter_sin", "declaration_quarter_cos",
     "severity_x_duration", "severity_x_frequency", "duration_x_days_to_declaration",
@@ -131,9 +127,6 @@ def run():
     logger.info(f"Loading data from {data_path}")
 
     df = pd.read_csv(data_path, low_memory=False)
-
-    logger.info("=== Model Development Started (with hyperparameter tuning) ===")
-
     df = df.dropna(subset=[TARGET])
     available_features = [f for f in FEATURES if f in df.columns]
     missing = set(FEATURES) - set(available_features)

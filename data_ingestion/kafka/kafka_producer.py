@@ -557,7 +557,7 @@ class KafkaProducerApp:
         #
         self.producer.flush()
 
-        # =========================================================================
+    # =========================================================================
     # REQUEST BUILDER
     # =========================================================================
 
@@ -566,7 +566,7 @@ class KafkaProducerApp:
         dataset: str,
         cursor: dict[str, Any],
         skip: int,
-        ) -> dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Build FEMA API request parameters.
         """
@@ -574,7 +574,7 @@ class KafkaProducerApp:
         metadata = ENDPOINTS[dataset]
 
         checkpoint_field = metadata["checkpoint_field"]
-
+        key_field = metadata.get("key_field")
         params = {
 
             "$top": PAGE_SIZE,
@@ -591,12 +591,67 @@ class KafkaProducerApp:
 
         }
 
-        if cursor["lastRefresh"]:
+        # Public Assistance uses gmProjectId as its reliable
+        # incremental cursor. FEMA's lastRefresh filter is not
+        # reliable for this endpoint.
+        if dataset == "public_assistance" and cursor.get("lastKey"):
+
+            params["$skip"] = 0
+
+            params["$orderby"] = (
+                f"{key_field} asc"
+            )
 
             params["$filter"] = (
-                f"{checkpoint_field} gt "
-                f"'{cursor['lastRefresh']}'"
+                f"{key_field} gt "
+                f"{int(cursor['lastKey'])}"
             )
+
+            return params
+
+        # Disaster Summaries uses disasterNumber as its reliable
+        # incremental cursor. The composite lastRefresh + id
+        # filter is not accepted reliably by this endpoint.
+        if dataset == "disaster_summaries" and cursor.get("lastKey"):
+
+            params["$skip"] = 0
+
+            params["$orderby"] = (
+                f"{key_field} asc"
+            )
+
+            params["$filter"] = (
+                f"{key_field} gt "
+                f"{int(cursor['lastKey'])}"
+            )
+
+            return params
+
+        if cursor["lastRefresh"]:
+
+            if key_field and cursor.get("lastKey"):
+
+                params["$filter"] = (
+                    f"({checkpoint_field} gt "
+                    f"'{cursor['lastRefresh']}') "
+                    f"or "
+                    f"({checkpoint_field} eq "
+                    f"'{cursor['lastRefresh']}' "
+                    f"and {key_field} gt "
+                    f"'{cursor['lastKey']}')"
+                )
+
+                params["$orderby"] = (
+                    f"{checkpoint_field} asc, "
+                    f"{key_field} asc"
+                )
+
+            else:
+
+                params["$filter"] = (
+                    f"{checkpoint_field} gt "
+                    f"'{cursor['lastRefresh']}'"
+                )
 
         return params
 
@@ -751,7 +806,7 @@ class KafkaProducerApp:
     def stream_dataset(
         self,
         dataset: str,
-        ) -> None:
+    ) -> None:
         """
         Stream one FEMA dataset incrementally.
 
@@ -782,7 +837,6 @@ class KafkaProducerApp:
 
         total_records = 0
 
-        
         self.logger.info(
             "Starting cursor : %s",
             cursor,
@@ -894,6 +948,7 @@ class KafkaProducerApp:
                 #
                 # Permanent client errors
                 #
+
                 if status in (
                     400,
                     401,
@@ -914,6 +969,7 @@ class KafkaProducerApp:
                 #
                 # Retryable server errors
                 #
+
                 if status in (
                     429,
                     500,
@@ -940,6 +996,7 @@ class KafkaProducerApp:
 
             except (
                 requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError,
                 requests.exceptions.ConnectionError,
             ):
 
@@ -1227,7 +1284,7 @@ class KafkaProducerApp:
         #
         # Final execution report
         #
-        self.report_metrics()   
+        self.report_metrics()
 
 
     # =========================================================================
@@ -1289,8 +1346,8 @@ class KafkaProducerApp:
     #     class LogContext:
     #
     # with ZERO indentation.
-    #             
-                        
+    #
+
 
 
 # =============================================================================
@@ -1393,4 +1450,4 @@ def main() -> int:
 
 if __name__ == "__main__":
 
-    sys.exit(main())
+    sys.checkpoint_field
